@@ -1,0 +1,2 @@
+Model,Accuracy,Macro F1,Precision,Recall,R2_Score
+Distractor_Ranker_GPU,0.9985,0.9980039860398784,0.9970178926441352,0.999,0.9918925166130066

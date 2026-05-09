@@ -1,0 +1,4 @@
+Split,Samples,Avg Article Length,Median Article Length,Max Article Length,Avg Question Length,Answer Distribution
+Train,70292,275,279,1162,10.0,"{'A': np.int64(15291), 'B': np.int64(18208), 'C': np.int64(19080), 'D': np.int64(17713)}"
+Val,8787,274,279,918,10.0,"{'A': np.int64(1876), 'B': np.int64(2315), 'C': np.int64(2387), 'D': np.int64(2209)}"
+Test,8787,275,280,1162,10.0,"{'A': np.int64(1979), 'B': np.int64(2203), 'C': np.int64(2424), 'D': np.int64(2181)}"

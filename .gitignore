@@ -59,3 +59,9 @@ race_rc_project/models/model_b/*.csv
 
 # Processed feature data (~14 MB)
 race_rc_project/data/processed/*.pkl
+
+# ---- Unwanted PDF Utils / Temp Files ----
+AL2002_LabProject.pdf
+extract_pdf.py
+pdf_content.txt
+temp_pdf_text.txt

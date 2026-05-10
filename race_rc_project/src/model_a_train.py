@@ -98,15 +98,15 @@ def train_xgboost_gpu(X_train, y_train, X_val, y_val):
     print(f"  Class imbalance: {neg_count}:{pos_count} -> scale_pos_weight={spw:.2f}")
 
     model = xgb.XGBClassifier(
-        n_estimators=500,
-        max_depth=8,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
+        n_estimators=800,
+        max_depth=10,
+        learning_rate=0.03,
+        subsample=0.85,
+        colsample_bytree=0.85,
         tree_method="hist",
         device="cuda",
         eval_metric="logloss",
-        early_stopping_rounds=30,
+        early_stopping_rounds=40,
         scale_pos_weight=spw,
         random_state=42,
     )
@@ -303,7 +303,7 @@ def train_logistic_regression(X_train, y_train, X_val, y_val):
     print("  Training: Logistic Regression (CPU - fast)")
     print("=" * 60)
     start = time.time()
-    model = LogisticRegression(max_iter=2000, C=1.0, solver="lbfgs", class_weight="balanced")
+    model = LogisticRegression(max_iter=3000, C=0.5, solver="lbfgs", class_weight="balanced")
     model.fit(X_train, y_train)
     elapsed = time.time() - start
     y_pred = model.predict(X_val)
@@ -321,7 +321,7 @@ def train_random_forest(X_train, y_train, X_val, y_val):
     print("  Training: Random Forest (CPU - fast)")
     print("=" * 60)
     start = time.time()
-    model = RandomForestClassifier(n_estimators=300, max_depth=12, class_weight="balanced", random_state=42)
+    model = RandomForestClassifier(n_estimators=500, max_depth=25, min_samples_split=5, class_weight="balanced", random_state=42, n_jobs=-1)
     model.fit(X_train, y_train)
     elapsed = time.time() - start
     y_pred = model.predict(X_val)
@@ -357,7 +357,7 @@ def train_svm(X_train, y_train, X_val, y_val):
 
     X_tr = scaler.fit_transform(X_tr_sub)
     X_v = scaler.transform(X_val)
-    model = SVC(kernel="rbf", C=1.0, probability=True, class_weight="balanced", random_state=42)
+    model = SVC(kernel="rbf", C=5.0, gamma="scale", probability=True, class_weight="balanced", random_state=42)
     model.fit(X_tr, y_tr_sub)
     elapsed = time.time() - start
     y_pred = model.predict(X_v)
@@ -465,9 +465,16 @@ def build_gpu_ensemble(models_dict, X_val, y_val, mlp_model=None, mlp_scaler=Non
             continue
         if hasattr(model, "predict_proba"):
             probs = model.predict_proba(X_val)
-            prob_list.append(probs)
-            valid_names.append(name)
-            print(f"    + {name}: shape {probs.shape}")
+            y_pred_temp = np.argmax(probs, axis=1)
+            weight = f1_score(y_val, y_pred_temp, average="macro", zero_division=0)
+            
+            # Penalize highly biased models like Naive Bayes
+            if weight < 0.45:
+                weight *= 0.1
+                
+            prob_list.append(probs * weight)
+            valid_names.append(f"{name} (w={weight:.2f})")
+            print(f"    + {name}: shape {probs.shape}, weight {weight:.3f}")
 
     # Add MLP predictions (GPU)
     if mlp_model is not None and mlp_scaler is not None:
@@ -520,14 +527,9 @@ if __name__ == "__main__":
     if xgb_model:
         save_artifact(xgb_model, os.path.join(MODEL_DIR, "xgboost_gpu.pkl"))
 
-    # 2. PyTorch MLP GPU
-    mlp_model, mlp_scaler, mlp_res = train_pytorch_mlp(X_train, y_train, X_val, y_val,
-                                                         epochs=50, batch_size=2048)
-    results["MLP_GPU"] = mlp_res
-    torch.save({"model_state": mlp_model.state_dict(), "scaler": mlp_scaler,
-                "input_dim": X_train.shape[1]},
-               os.path.join(MODEL_DIR, "mlp_gpu.pth"))
-    print(f"[INFO] Saved -> {os.path.join(MODEL_DIR, 'mlp_gpu.pth')}")
+    # 2. PyTorch MLP GPU (DISABLED DUE TO INSTRUCTOR BAN ON NEURAL NETWORKS)
+    mlp_model, mlp_scaler = None, None
+    print("\n[SKIP] PyTorch MLP is disabled because Neural Networks are not allowed by the instructor.")
 
     # 3. GPU K-Means
     km_centroids, km_scaler, km_res = train_gpu_kmeans(X_train, y_train, n_clusters=2)

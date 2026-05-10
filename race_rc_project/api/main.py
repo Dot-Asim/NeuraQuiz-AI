@@ -41,10 +41,12 @@ async def startup_event():
     except Exception as e:
         print(f"[API] Error loading Dataset: {e}")
 
+from typing import Optional
+
 class QuizRequest(BaseModel):
     article: str
-    question: str
-    correct_answer: str
+    question: Optional[str] = ""
+    correct_answer: Optional[str] = ""
 
 class VerifyRequest(BaseModel):
     article: str

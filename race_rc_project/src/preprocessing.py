@@ -24,7 +24,7 @@ import pickle
 import numpy as np
 import pandas as pd
 from scipy.sparse import hstack, csr_matrix
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.preprocessing import LabelEncoder
 import torch
 
@@ -109,6 +109,23 @@ def build_tfidf_vectorizer(
     print(f"[INFO] TF-IDF vocabulary size: {len(vectorizer.vocabulary_)}")
     return vectorizer
 
+def build_onehot_vectorizer(
+    corpus: list[str],
+    max_features: int = 15000,
+) -> CountVectorizer:
+    """Fit a CountVectorizer (One-Hot Encoding) on the given corpus."""
+    from sklearn.feature_extraction.text import CountVectorizer
+    vectorizer = CountVectorizer(
+        max_features=max_features,
+        stop_words="english",
+        binary=True, # This enforces One-Hot Encoding
+        min_df=5,
+        max_df=0.9,
+    )
+    vectorizer.fit(corpus)
+    print(f"[INFO] One-Hot vocabulary size: {len(vectorizer.vocabulary_)}")
+    return vectorizer
+
 def get_sims_gpu(vecs1_sparse, vecs2_sparse, batch_size=10000):
     """
     Compute row-wise cosine similarity using GPU with batching to manage VRAM.
@@ -134,15 +151,11 @@ def get_sims_gpu(vecs1_sparse, vecs2_sparse, batch_size=10000):
 # ─────────────────────────────────────────────────────────────
 
 def _load_sbert():
-    """Load Sentence-BERT on GPU for semantic similarity features."""
-    try:
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer("all-MiniLM-L6-v2", device="cuda")
-        print("[GPU] SBERT loaded on CUDA for semantic features")
-        return model
-    except ImportError:
-        print("[WARN] sentence-transformers not installed. Skipping SBERT features.")
-        return None
+    """Load Sentence-BERT on GPU for semantic similarity features.
+    DISABLED: Professor explicitly banned Neural Networks.
+    """
+    print("[WARN] Neural Networks banned by instructor. Skipping SBERT features.")
+    return None
 
 
 def _sbert_cosine_gpu(emb1, emb2):
@@ -303,6 +316,10 @@ if __name__ == "__main__":
     train_articles = train_df["article"].apply(clean_text).tolist()
     tfidf = build_tfidf_vectorizer(train_articles)
     save_artifact(tfidf, os.path.join(PROCESSED_DIR, "tfidf_vectorizer.pkl"))
+
+    # Step 2b: Fit One-Hot Encoding on training articles (Required Primary baseline)
+    onehot = build_onehot_vectorizer(train_articles)
+    save_artifact(onehot, os.path.join(PROCESSED_DIR, "onehot_vectorizer.pkl"))
 
     # Step 3: Load SBERT for semantic features (GPU)
     sbert = _load_sbert()

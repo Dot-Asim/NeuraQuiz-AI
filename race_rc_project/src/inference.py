@@ -96,20 +96,9 @@ class RCInferenceEngine:
         else:
             self.distractor_ranker = None
 
-        # Sentence-BERT for hints
+        # Sentence-BERT for hints (DISABLED DUE TO BAN)
         self.sbert = None
-        if HAS_SBERT:
-            sbert_path = os.path.join(self.model_b_dir, "sbert_model.pkl")
-            if os.path.exists(sbert_path):
-                self.sbert = load_artifact(sbert_path)
-            else:
-                try:
-                    print("[Engine] Downloading Sentence-BERT model...")
-                    self.sbert = SentenceTransformer("all-MiniLM-L6-v2", device=self.device)
-                except Exception as e:
-                    print(f"[Engine] Could not load SBERT: {e}")
-
-        print(f"[Engine] Ready. Model A: {self.model_a_name} | SBERT: {'YES' if self.sbert else 'NO'} | Device: {self.device}")
+        print(f"[Engine] Ready. Model A: {self.model_a_name} | SBERT: NO (Banned) | Device: {self.device}")
 
     # ─────────────────────────────────────────────────────────
     # Answer Verification
@@ -144,6 +133,9 @@ class RCInferenceEngine:
         art_words = set(art_clean.split())
         overlap = len(opt_words & art_words) / max(len(opt_words), 1)
 
+        features_list = [sim_art_opt, sim_q_opt, sim_art_q, overlap,
+                         len(opt_clean.split()), len(q_clean.split())]
+
         if self.sbert:
             sbert_art_emb = self.sbert.encode([art_clean], convert_to_numpy=True)[0]
             sbert_q_emb = self.sbert.encode([q_clean], convert_to_numpy=True)[0]
@@ -152,12 +144,10 @@ class RCInferenceEngine:
             sbert_sim_art_opt = cos_sim(sbert_art_emb, sbert_opt_emb)
             sbert_sim_q_opt = cos_sim(sbert_q_emb, sbert_opt_emb)
             sbert_sim_art_q = cos_sim(sbert_art_emb, sbert_q_emb)
-        else:
-            sbert_sim_art_opt, sbert_sim_q_opt, sbert_sim_art_q = 0.0, 0.0, 0.0
+            
+            features_list.extend([sbert_sim_art_opt, sbert_sim_q_opt, sbert_sim_art_q])
 
-        features = np.array([[sim_art_opt, sim_q_opt, sim_art_q, overlap,
-                              len(opt_clean.split()), len(q_clean.split()),
-                              sbert_sim_art_opt, sbert_sim_q_opt, sbert_sim_art_q]])
+        features = np.array([features_list])
 
         if self.model_a and hasattr(self.model_a, "predict_proba"):
             proba = self.model_a.predict_proba(features)[0]
@@ -232,15 +222,56 @@ class RCInferenceEngine:
         return hints
 
     # ─────────────────────────────────────────────────────────
+    # Question Generation (Template-Based + ML Ranking)
+    # ─────────────────────────────────────────────────────────
+
+    def generate_question(self, article: str) -> tuple[str, str]:
+        """
+        Extracts candidate sentences from the article, applies Wh-word templates,
+        and ranks them to generate a meaningful question and answer.
+        Since we are just implementing and not training the ranker yet, we use a heuristic.
+        """
+        import random
+        sentences = [s.strip() for s in article.split('.') if len(s.split()) > 5]
+        if not sentences:
+            return "What is the main topic of the passage?", "The passage"
+            
+        # Step 1: Candidate Extraction (heuristic: pick sentences with Named Entities or nouns)
+        # We will pick a reasonably long sentence as our candidate.
+        candidate_sentences = [s for s in sentences if 10 <= len(s.split()) <= 20]
+        if not candidate_sentences:
+            candidate_sentences = sentences
+            
+        # Step 2 & 3: Apply Templates and Rank
+        # For now, we simulate the ML ranking by picking a random candidate and applying a basic Wh-template.
+        best_sentence = random.choice(candidate_sentences)
+        words = best_sentence.split()
+        
+        # Simple heuristic to extract a noun/subject (just taking a prominent word for now)
+        # In a fully trained system, this would use POS tagging.
+        if len(words) > 3:
+            answer_word = words[len(words)//2] 
+            question = best_sentence.replace(answer_word, "What") + "?"
+            return question, answer_word
+        else:
+            return "What does the passage discuss?", best_sentence
+
+    # ─────────────────────────────────────────────────────────
     # Full Pipeline: Generate Quiz from Article
     # ─────────────────────────────────────────────────────────
 
-    def generate_quiz(self, article: str, question: str, correct_answer: str) -> dict:
+    def generate_quiz(self, article: str, question: str = "", correct_answer: str = "") -> dict:
         """
         Full pipeline: given an article, question, and correct answer,
         generate distractors, create MCQ options, and prepare hints.
+        If question or correct_answer is missing, it automatically generates them.
         """
         start = time.time()
+
+        if not question or not correct_answer:
+            generated_q, generated_a = self.generate_question(article)
+            question = question or generated_q
+            correct_answer = correct_answer or generated_a
 
         # Generate 3 distractors
         distractors = self.generate_distractors(article, question, correct_answer)

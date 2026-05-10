@@ -196,6 +196,13 @@ def train_distractor_ranker_gpu(X_train, y_train, X_val, y_val):
     print("=" * 60)
     start = time.time()
 
+    # Handle class imbalance (75% distractors (1) / 25% correct (0))
+    # We want to scale positive weights. 
+    neg_count = np.sum(y_train == 0)
+    pos_count = np.sum(y_train == 1)
+    spw = neg_count / max(pos_count, 1)
+    print(f"  Class imbalance: {neg_count}:{pos_count} -> scale_pos_weight={spw:.3f}")
+
     if HAS_XGB:
         model = xgb.XGBClassifier(
             n_estimators=300,
@@ -205,13 +212,14 @@ def train_distractor_ranker_gpu(X_train, y_train, X_val, y_val):
             device="cuda",
             eval_metric="logloss",
             early_stopping_rounds=20,
+            scale_pos_weight=spw,
             random_state=42,
         )
         model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=50)
     else:
         # Fallback: LogisticRegression
         from sklearn.linear_model import LogisticRegression
-        model = LogisticRegression(max_iter=1000, C=1.0)
+        model = LogisticRegression(max_iter=1000, C=1.0, class_weight="balanced")
         model.fit(X_train, y_train)
 
     elapsed = time.time() - start
@@ -340,36 +348,19 @@ if __name__ == "__main__":
     ranker, ranker_res = train_distractor_ranker_gpu(X_train_d, y_train_d, X_val_d, y_val_d)
     save_artifact(ranker, os.path.join(MODEL_DIR, "distractor_ranker.pkl"))
 
-    # ---- SBERT Hint Generation (GPU) ----
-    if HAS_SBERT:
-        print("\n[PHASE] Loading Sentence-BERT model on GPU...")
-        sbert = SentenceTransformer("all-MiniLM-L6-v2", device="cuda")
-        save_artifact(sbert, os.path.join(MODEL_DIR, "sbert_model.pkl"))
-
-        row = val_df.iloc[0]
-        label_map = {"A": 0, "B": 1, "C": 2, "D": 3}
-        correct_idx = label_map[row["answer"]]
-        option_cols = ["A", "B", "C", "D"]
-        hints = generate_hints_sbert(
-            row["article"], row["question"],
-            row[option_cols[correct_idx]], sbert
-        )
-        print("\n[DEMO] SBERT Hints for sample 0:")
-        for h in hints:
-            print(f"  Hint {h['level']} (sim={h['similarity']:.3f}): {h['text'][:100]}...")
-    else:
-        print("\n[INFO] SBERT not available; using TF-IDF fallback for hints.")
-        row = val_df.iloc[0]
-        label_map = {"A": 0, "B": 1, "C": 2, "D": 3}
-        correct_idx = label_map[row["answer"]]
-        option_cols = ["A", "B", "C", "D"]
-        hints = generate_hints_tfidf(
-            row["article"], row["question"],
-            row[option_cols[correct_idx]], vectorizer
-        )
-        print("\n[DEMO] TF-IDF Hints for sample 0:")
-        for h in hints:
-            print(f"  Hint {h['level']} (sim={h['similarity']:.3f}): {h['text'][:100]}...")
+    # ---- TF-IDF Hint Generation (SBERT Disabled) ----
+    print("\n[INFO] Neural Networks banned by instructor. Using TF-IDF fallback for hints.")
+    row = val_df.iloc[0]
+    label_map = {"A": 0, "B": 1, "C": 2, "D": 3}
+    correct_idx = label_map[row["answer"]]
+    option_cols = ["A", "B", "C", "D"]
+    hints = generate_hints_tfidf(
+        row["article"], row["question"],
+        row[option_cols[correct_idx]], vectorizer
+    )
+    print("\n[DEMO] TF-IDF Hints for sample 0:")
+    for h in hints:
+        print(f"  Hint {h['level']} (sim={h['similarity']:.3f}): {h['text'][:100]}...")
 
     # ---- Evaluate Distractors ----
     evaluate_distractors(val_df, vectorizer, ranker, n_samples=200)

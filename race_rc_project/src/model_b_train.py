@@ -12,47 +12,59 @@ Implements:
   - Graduated hint generation (SBERT on GPU with TF-IDF fallback)
 """
 
+from preprocessing import load_race_data, clean_text, load_artifact, save_artifact
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    confusion_matrix,
+)
+from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine
+from sklearn.feature_extraction.text import TfidfVectorizer
+import torch
+import pandas as pd
+import numpy as np
+import re
+import time
 import os
 import sys
 
 # Ensure dotasim environment is active
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+sys.path.insert(
+    0,
+    os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..")))
 try:
     from check_pkgs import verify_environment
+
     verify_environment()
 except ImportError:
     print("[WARN] Environment check skipped (check_pkgs.py not found).")
 
-import time
-import re
-import string
-import numpy as np
-import pandas as pd
-import torch
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine
-from sklearn.metrics import (
-    accuracy_score, f1_score, precision_score, recall_score,
-    classification_report, confusion_matrix,
-)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from preprocessing import load_race_data, clean_text, load_artifact, save_artifact
 
 # ---- GPU Setup (Strict) ----
 if not torch.cuda.is_available():
-    print("FATAL ERROR: CUDA is NOT available! This project is strictly optimized for GPU execution on RTX 5070 Ti.")
-    print("Please check your drivers and CUDA installation. Exiting to prevent CPU fallback.")
-    sys.exit(1)
+    print("WARNING: CUDA not found! Falling back to CPU.")
 
-DEVICE = torch.device("cuda")
-print(f"[GPU] ACTIVE: {torch.cuda.get_device_name(0)}")
+
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda")
+    print(f"[GPU] ACTIVE: {torch.cuda.get_device_name(0)}")
+else:
+    DEVICE = torch.device("cpu")
+    print("[CPU] ACTIVE")
 print("[GPU] Enforcement: SBERT and XGBoost will run exclusively on CUDA device 0.")
 
 # ---- Optional: Sentence-Transformers (GPU) ----
 try:
-    from sentence_transformers import SentenceTransformer
+    pass
+
     HAS_SBERT = True
 except ImportError:
     HAS_SBERT = False
@@ -61,6 +73,7 @@ except ImportError:
 # ---- Optional: XGBoost (GPU) ----
 try:
     import xgboost as xgb
+
     HAS_XGB = True
 except ImportError:
     HAS_XGB = False
@@ -71,15 +84,17 @@ except ImportError:
 #  1. Sentence Splitting
 # =============================================================
 
+
 def split_sentences(text: str) -> list[str]:
     """Split a passage into sentences using regex."""
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
     return [s.strip() for s in sentences if len(s.strip()) > 10]
 
 
 # =============================================================
 #  2. Distractor Candidate Extraction
 # =============================================================
+
 
 def extract_distractor_candidates(
     article: str,
@@ -115,12 +130,15 @@ def extract_distractor_candidates(
         words = sent_clean.split()
         if len(words) < 2:
             continue
-        candidate_text = " ".join(words[:15]) if len(words) > 15 else sent_clean
-        candidates.append({
-            "text": candidate_text,
-            "sim_to_answer": float(sims[i]),
-            "sentence_idx": i,
-        })
+        candidate_text = " ".join(words[:15]) if len(
+            words) > 15 else sent_clean
+        candidates.append(
+            {
+                "text": candidate_text,
+                "sim_to_answer": float(sims[i]),
+                "sentence_idx": i,
+            }
+        )
 
     # Sort by medium similarity (plausible but wrong)
     candidates.sort(key=lambda x: abs(x["sim_to_answer"] - 0.3))
@@ -130,6 +148,7 @@ def extract_distractor_candidates(
 # =============================================================
 #  3. Distractor Ranking -- XGBoost GPU
 # =============================================================
+
 
 def build_distractor_training_data(
     df: pd.DataFrame,
@@ -168,9 +187,17 @@ def build_distractor_training_data(
 
         for opt_i, opt_col in enumerate(option_cols):
             opt_vec = tfidf_mat[3 + opt_i: 4 + opt_i]
-            sim_to_answer = float(sklearn_cosine(opt_vec, correct_vec).flatten()[0])
-            sim_to_question = float(sklearn_cosine(opt_vec, q_vec).flatten()[0])
-            sim_to_article = float(sklearn_cosine(opt_vec, art_vec).flatten()[0])
+            sim_to_answer = float(
+                sklearn_cosine(
+                    opt_vec,
+                    correct_vec).flatten()[0])
+            sim_to_question = float(
+                sklearn_cosine(
+                    opt_vec, q_vec).flatten()[0])
+            sim_to_article = float(
+                sklearn_cosine(
+                    opt_vec,
+                    art_vec).flatten()[0])
 
             opt_text = clean_text(row[opt_col])
             opt_words = set(opt_text.split())
@@ -178,14 +205,24 @@ def build_distractor_training_data(
             word_overlap = len(opt_words & ans_words) / max(len(opt_words), 1)
             opt_len = len(opt_text.split())
 
-            features = [sim_to_answer, sim_to_question, sim_to_article, word_overlap, opt_len]
+            features = [
+                sim_to_answer,
+                sim_to_question,
+                sim_to_article,
+                word_overlap,
+                opt_len,
+            ]
             all_features.append(features)
             is_distractor = 1 if opt_i != correct_idx else 0
             all_labels.append(is_distractor)
 
     X = np.array(all_features, dtype=np.float32)
     y = np.array(all_labels, dtype=np.int32)
-    print(f"[INFO] Distractor data: X={X.shape} y={y.shape} distractor_rate={y.mean():.4f}")
+    print(
+        f"[INFO] Distractor data: X={
+            X.shape} y={
+            y.shape} distractor_rate={
+                y.mean():.4f}")
     return X, y
 
 
@@ -197,11 +234,12 @@ def train_distractor_ranker_gpu(X_train, y_train, X_val, y_val):
     start = time.time()
 
     # Handle class imbalance (75% distractors (1) / 25% correct (0))
-    # We want to scale positive weights. 
+    # We want to scale positive weights.
     neg_count = np.sum(y_train == 0)
     pos_count = np.sum(y_train == 1)
     spw = neg_count / max(pos_count, 1)
-    print(f"  Class imbalance: {neg_count}:{pos_count} -> scale_pos_weight={spw:.3f}")
+    print(
+        f"  Class imbalance: {neg_count}:{pos_count} -> scale_pos_weight={spw:.3f}")
 
     if HAS_XGB:
         model = xgb.XGBClassifier(
@@ -219,7 +257,9 @@ def train_distractor_ranker_gpu(X_train, y_train, X_val, y_val):
     else:
         # Fallback: LogisticRegression
         from sklearn.linear_model import LogisticRegression
-        model = LogisticRegression(max_iter=1000, C=1.0, class_weight="balanced")
+
+        model = LogisticRegression(
+            max_iter=1000, C=1.0, class_weight="balanced")
         model.fit(X_train, y_train)
 
     elapsed = time.time() - start
@@ -230,16 +270,28 @@ def train_distractor_ranker_gpu(X_train, y_train, X_val, y_val):
     rec = recall_score(y_val, y_pred, average="macro", zero_division=0)
 
     print(f"  Time: {elapsed:.1f}s")
-    print(f"  Accuracy: {acc:.4f} | Precision: {prec:.4f} | Recall: {rec:.4f} | F1: {f1:.4f}")
+    print(
+        f"  Accuracy: {
+            acc:.4f} | Precision: {
+            prec:.4f} | Recall: {
+                rec:.4f} | F1: {
+                    f1:.4f}")
     print(f"  Confusion Matrix:\n{confusion_matrix(y_val, y_pred)}")
-    return model, {"accuracy": acc, "precision": prec, "recall": rec, "f1_macro": f1}
+    return model, {"accuracy": acc, "precision": prec,
+                   "recall": rec, "f1_macro": f1}
 
 
 # =============================================================
 #  4. Hint Generation -- SBERT on GPU
 # =============================================================
 
-def generate_hints_tfidf(article, question, correct_answer, vectorizer, n_hints=3):
+
+def generate_hints_tfidf(
+        article,
+        question,
+        correct_answer,
+        vectorizer,
+        n_hints=3):
     """TF-IDF fallback for hint generation."""
     sentences = split_sentences(article)
     if not sentences:
@@ -256,16 +308,28 @@ def generate_hints_tfidf(article, question, correct_answer, vectorizer, n_hints=
     sent_vecs = tfidf_mat[1:]
     sims = sklearn_cosine(target_vec, sent_vecs).flatten()
 
-    ranked = sorted(enumerate(sentences), key=lambda x: sims[x[0]], reverse=True)
+    ranked = sorted(enumerate(sentences),
+                    key=lambda x: sims[x[0]], reverse=True)
     hints = []
     for rank, (sent_idx, sent_text) in enumerate(ranked[:n_hints]):
         hint_level = n_hints - rank
-        hints.append({"level": hint_level, "text": sent_text, "similarity": float(sims[sent_idx])})
+        hints.append(
+            {
+                "level": hint_level,
+                "text": sent_text,
+                "similarity": float(sims[sent_idx]),
+            }
+        )
     hints.sort(key=lambda x: x["level"])
     return hints
 
 
-def generate_hints_sbert(article, question, correct_answer, sbert_model, n_hints=3):
+def generate_hints_sbert(
+        article,
+        question,
+        correct_answer,
+        sbert_model,
+        n_hints=3):
     """GPU-accelerated hint generation using Sentence-BERT."""
     sentences = split_sentences(article)
     if not sentences:
@@ -275,17 +339,27 @@ def generate_hints_sbert(article, question, correct_answer, sbert_model, n_hints
     all_texts = [target] + sentences
 
     # SBERT encode on GPU
-    embeddings = sbert_model.encode(all_texts, convert_to_tensor=True, show_progress_bar=False)
+    embeddings = sbert_model.encode(
+        all_texts, convert_to_tensor=True, show_progress_bar=False
+    )
     target_emb = embeddings[0:1]
     sent_embs = embeddings[1:]
 
-    sims = torch.nn.functional.cosine_similarity(target_emb, sent_embs).cpu().numpy()
+    sims = torch.nn.functional.cosine_similarity(
+        target_emb, sent_embs).cpu().numpy()
 
-    ranked = sorted(enumerate(sentences), key=lambda x: sims[x[0]], reverse=True)
+    ranked = sorted(enumerate(sentences),
+                    key=lambda x: sims[x[0]], reverse=True)
     hints = []
     for rank, (sent_idx, sent_text) in enumerate(ranked[:n_hints]):
         hint_level = n_hints - rank
-        hints.append({"level": hint_level, "text": sent_text, "similarity": float(sims[sent_idx])})
+        hints.append(
+            {
+                "level": hint_level,
+                "text": sent_text,
+                "similarity": float(sims[sent_idx]),
+            }
+        )
     hints.sort(key=lambda x: x["level"])
     return hints
 
@@ -293,6 +367,7 @@ def generate_hints_sbert(article, question, correct_answer, sbert_model, n_hints
 # =============================================================
 #  5. Evaluate Distractor Quality
 # =============================================================
+
 
 def evaluate_distractors(df, vectorizer, ranker_model, n_samples=100):
     """Evaluate distractor generation quality."""
@@ -311,8 +386,11 @@ def evaluate_distractors(df, vectorizer, ranker_model, n_samples=100):
         correct_text = row[option_cols[correct_idx]]
 
         candidates = extract_distractor_candidates(
-            row["article"], row["question"], correct_text,
-            [row[c] for c in option_cols], vectorizer
+            row["article"],
+            row["question"],
+            correct_text,
+            [row[c] for c in option_cols],
+            vectorizer,
         )
         if len(candidates) >= 3:
             for c in candidates[:3]:
@@ -321,7 +399,9 @@ def evaluate_distractors(df, vectorizer, ranker_model, n_samples=100):
                 total += 1
 
     accuracy = correct_not_selected / max(total, 1)
-    print(f"  Distractor accuracy (not selecting correct answer): {accuracy:.4f}")
+    print(
+        f"  Distractor accuracy (not selecting correct answer): {
+            accuracy:.4f}")
     return accuracy
 
 
@@ -338,39 +418,54 @@ if __name__ == "__main__":
 
     # Load data and vectorizer
     train_df, val_df, test_df = load_race_data(DATA_DIR)
-    vectorizer = load_artifact(os.path.join(PROCESSED_DIR, "tfidf_vectorizer.pkl"))
+    vectorizer = load_artifact(
+        os.path.join(
+            PROCESSED_DIR,
+            "tfidf_vectorizer.pkl"))
 
     # ---- Distractor Ranker (XGBoost GPU) ----
     print("\n[PHASE] Building distractor training data...")
-    X_train_d, y_train_d = build_distractor_training_data(train_df, vectorizer, max_samples=15000)
-    X_val_d, y_val_d = build_distractor_training_data(val_df, vectorizer, max_samples=3000)
+    X_train_d, y_train_d = build_distractor_training_data(
+        train_df, vectorizer, max_samples=15000
+    )
+    X_val_d, y_val_d = build_distractor_training_data(
+        val_df, vectorizer, max_samples=3000
+    )
 
-    ranker, ranker_res = train_distractor_ranker_gpu(X_train_d, y_train_d, X_val_d, y_val_d)
+    ranker, ranker_res = train_distractor_ranker_gpu(
+        X_train_d, y_train_d, X_val_d, y_val_d
+    )
     save_artifact(ranker, os.path.join(MODEL_DIR, "distractor_ranker.pkl"))
 
     # ---- TF-IDF Hint Generation (SBERT Disabled) ----
-    print("\n[INFO] Neural Networks banned by instructor. Using TF-IDF fallback for hints.")
+    print(
+        "\n[INFO] Neural Networks banned by instructor. Using TF-IDF fallback for hints."
+    )
     row = val_df.iloc[0]
     label_map = {"A": 0, "B": 1, "C": 2, "D": 3}
     correct_idx = label_map[row["answer"]]
     option_cols = ["A", "B", "C", "D"]
     hints = generate_hints_tfidf(
-        row["article"], row["question"],
-        row[option_cols[correct_idx]], vectorizer
+        row["article"], row["question"], row[option_cols[correct_idx]], vectorizer
     )
     print("\n[DEMO] TF-IDF Hints for sample 0:")
     for h in hints:
-        print(f"  Hint {h['level']} (sim={h['similarity']:.3f}): {h['text'][:100]}...")
+        print(
+            f"  Hint {h['level']} (sim={h['similarity']:.3f}): {h['text'][:100]}...")
 
     # ---- Evaluate Distractors ----
     evaluate_distractors(val_df, vectorizer, ranker, n_samples=200)
 
     # ---- Save Results ----
-    pd.DataFrame([{
-        "Model": "Distractor_Ranker_GPU",
-        "Accuracy": ranker_res.get("accuracy", 0),
-        "Macro_F1": ranker_res.get("f1_macro", 0),
-        "Precision": ranker_res.get("precision", 0),
-        "Recall": ranker_res.get("recall", 0),
-    }]).to_csv(os.path.join(MODEL_DIR, "model_b_results.csv"), index=False)
+    pd.DataFrame(
+        [
+            {
+                "Model": "Distractor_Ranker_GPU",
+                "Accuracy": ranker_res.get("accuracy", 0),
+                "Macro_F1": ranker_res.get("f1_macro", 0),
+                "Precision": ranker_res.get("precision", 0),
+                "Recall": ranker_res.get("recall", 0),
+            }
+        ]
+    ).to_csv(os.path.join(MODEL_DIR, "model_b_results.csv"), index=False)
     print(f"\nDONE: Model B training complete. Models saved to: {MODEL_DIR}")

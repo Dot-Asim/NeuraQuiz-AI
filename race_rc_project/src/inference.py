@@ -5,39 +5,46 @@ Provides a single interface to run both Model A (answer verification)
 and Model B (distractor + hint generation) on new input.
 """
 
-import os
-import sys
-
-# Ensure dotasim environment is active
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-try:
-    from check_pkgs import verify_environment
-    verify_environment()
-except ImportError:
-    print("[WARN] Environment check skipped (check_pkgs.py not found).")
-
-import time
-import numpy as np
-import torch
-torch.cuda.is_available = lambda: True
-torch.cuda.get_device_name = lambda x: "RTX 5070 Ti (Mock)"
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from preprocessing import clean_text, load_artifact
 from model_b_train import (
-    split_sentences,
     extract_distractor_candidates,
     generate_hints_tfidf,
     generate_hints_sbert,
 )
+from preprocessing import clean_text, load_artifact
+import torch
+import numpy as np
+import time
+import os
+import sys
+
+# Ensure dotasim environment is active
+sys.path.insert(
+    0,
+    os.path.abspath(
+        os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "..")))
+try:
+    from check_pkgs import verify_environment
+
+    verify_environment()
+except ImportError:
+    print("[WARN] Environment check skipped (check_pkgs.py not found).")
+
+
+torch.cuda.is_available = lambda: True
+torch.cuda.get_device_name = lambda x: "RTX 5070 Ti (Mock)"
+
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # ─────────────────────────────────────────────────────────────
 # Optional imports
 # ─────────────────────────────────────────────────────────────
 try:
-    from sentence_transformers import SentenceTransformer
+    pass
+
     HAS_SBERT = True
 except ImportError:
     HAS_SBERT = False
@@ -59,10 +66,14 @@ class RCInferenceEngine:
         self.model_a_dir = os.path.join(project_root, "models", "model_a")
         self.model_b_dir = os.path.join(project_root, "models", "model_b")
         if not torch.cuda.is_available():
-            print("WARNING: CUDA (GPU) is required but not found! Inference should run on RTX 5070 Ti, but proceeding on CPU for testing.")
+            print(
+                "WARNING: CUDA (GPU) is required but not found! Inference should run on RTX 5070 Ti, but proceeding on CPU for testing."
+            )
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         if torch.cuda.is_available():
-            print(f"[GPU] Inference Engine active on: {torch.cuda.get_device_name(0)}")
+            print(
+                f"[GPU] Inference Engine active on: {
+                    torch.cuda.get_device_name(0)}")
         else:
             print("[GPU] Inference Engine active on: CPU")
 
@@ -79,7 +90,10 @@ class RCInferenceEngine:
         )
 
         # Model A: best supervised model (try XGBoost first, then LR)
-        for name in ["xgboost_gpu.pkl", "logistic_regression.pkl", "random_forest.pkl"]:
+        for name in [
+            "xgboost_gpu.pkl",
+            "logistic_regression.pkl",
+                "random_forest.pkl"]:
             path = os.path.join(self.model_a_dir, name)
             if os.path.exists(path):
                 self.model_a = load_artifact(path)
@@ -98,13 +112,20 @@ class RCInferenceEngine:
 
         # Sentence-BERT for hints (DISABLED DUE TO BAN)
         self.sbert = None
-        print(f"[Engine] Ready. Model A: {self.model_a_name} | SBERT: NO (Banned) | Device: {self.device}")
+        print(
+            f"[Engine] Ready. Model A: {
+                self.model_a_name} | SBERT: NO (Banned) | Device: {
+                self.device}")
 
     # ─────────────────────────────────────────────────────────
     # Answer Verification
     # ─────────────────────────────────────────────────────────
 
-    def verify_answer(self, article: str, question: str, selected_option: str) -> dict:
+    def verify_answer(
+            self,
+            article: str,
+            question: str,
+            selected_option: str) -> dict:
         """
         Given an article, a question, and the user's selected answer,
         predict whether it is correct.
@@ -133,19 +154,29 @@ class RCInferenceEngine:
         art_words = set(art_clean.split())
         overlap = len(opt_words & art_words) / max(len(opt_words), 1)
 
-        features_list = [sim_art_opt, sim_q_opt, sim_art_q, overlap,
-                         len(opt_clean.split()), len(q_clean.split())]
+        features_list = [
+            sim_art_opt,
+            sim_q_opt,
+            sim_art_q,
+            overlap,
+            len(opt_clean.split()),
+            len(q_clean.split()),
+        ]
 
         if self.sbert:
-            sbert_art_emb = self.sbert.encode([art_clean], convert_to_numpy=True)[0]
-            sbert_q_emb = self.sbert.encode([q_clean], convert_to_numpy=True)[0]
-            sbert_opt_emb = self.sbert.encode([opt_clean], convert_to_numpy=True)[0]
-            
+            sbert_art_emb = self.sbert.encode(
+                [art_clean], convert_to_numpy=True)[0]
+            sbert_q_emb = self.sbert.encode(
+                [q_clean], convert_to_numpy=True)[0]
+            sbert_opt_emb = self.sbert.encode(
+                [opt_clean], convert_to_numpy=True)[0]
+
             sbert_sim_art_opt = cos_sim(sbert_art_emb, sbert_opt_emb)
             sbert_sim_q_opt = cos_sim(sbert_q_emb, sbert_opt_emb)
             sbert_sim_art_q = cos_sim(sbert_art_emb, sbert_q_emb)
-            
-            features_list.extend([sbert_sim_art_opt, sbert_sim_q_opt, sbert_sim_art_q])
+
+            features_list.extend(
+                [sbert_sim_art_opt, sbert_sim_q_opt, sbert_sim_art_q])
 
         features = np.array([features_list])
 
@@ -183,18 +214,19 @@ class RCInferenceEngine:
         start = time.time()
 
         candidates = extract_distractor_candidates(
-            article, question, correct_answer, [correct_answer], self.vectorizer
-        )
+            article, question, correct_answer, [correct_answer], self.vectorizer)
 
         # Return top-n
         distractors = []
         for c in candidates[:n]:
-            distractors.append({
-                "text": c["text"],
-                "similarity_score": c["sim_to_answer"],
-            })
+            distractors.append(
+                {
+                    "text": c["text"],
+                    "similarity_score": c["sim_to_answer"],
+                }
+            )
 
-        latency = (time.time() - start) * 1000
+        (time.time() - start) * 1000
         return distractors
 
     # ─────────────────────────────────────────────────────────
@@ -202,8 +234,11 @@ class RCInferenceEngine:
     # ─────────────────────────────────────────────────────────
 
     def generate_hints(
-        self, article: str, question: str, correct_answer: str, n_hints: int = 3
-    ) -> list[dict]:
+            self,
+            article: str,
+            question: str,
+            correct_answer: str,
+            n_hints: int = 3) -> list[dict]:
         """
         Generate graduated hints.
         Uses SBERT (GPU) if available, falls back to TF-IDF.
@@ -211,9 +246,13 @@ class RCInferenceEngine:
         start = time.time()
 
         if self.sbert:
-            hints = generate_hints_sbert(article, question, correct_answer, self.sbert, n_hints)
+            hints = generate_hints_sbert(
+                article, question, correct_answer, self.sbert, n_hints
+            )
         else:
-            hints = generate_hints_tfidf(article, question, correct_answer, self.vectorizer, n_hints)
+            hints = generate_hints_tfidf(
+                article, question, correct_answer, self.vectorizer, n_hints
+            )
 
         latency = (time.time() - start) * 1000
         for h in hints:
@@ -232,25 +271,30 @@ class RCInferenceEngine:
         Since we are just implementing and not training the ranker yet, we use a heuristic.
         """
         import random
-        sentences = [s.strip() for s in article.split('.') if len(s.split()) > 5]
+
+        sentences = [s.strip()
+                     for s in article.split(".") if len(s.split()) > 5]
         if not sentences:
             return "What is the main topic of the passage?", "The passage"
-            
+
         # Step 1: Candidate Extraction (heuristic: pick sentences with Named Entities or nouns)
         # We will pick a reasonably long sentence as our candidate.
-        candidate_sentences = [s for s in sentences if 10 <= len(s.split()) <= 20]
+        candidate_sentences = [
+            s for s in sentences if 10 <= len(
+                s.split()) <= 20]
         if not candidate_sentences:
             candidate_sentences = sentences
-            
+
         # Step 2 & 3: Apply Templates and Rank
-        # For now, we simulate the ML ranking by picking a random candidate and applying a basic Wh-template.
+        # For now, we simulate the ML ranking by picking a random candidate and
+        # applying a basic Wh-template.
         best_sentence = random.choice(candidate_sentences)
         words = best_sentence.split()
-        
+
         # Simple heuristic to extract a noun/subject (just taking a prominent word for now)
         # In a fully trained system, this would use POS tagging.
         if len(words) > 3:
-            answer_word = words[len(words)//2] 
+            answer_word = words[len(words) // 2]
             question = best_sentence.replace(answer_word, "What") + "?"
             return question, answer_word
         else:
@@ -260,7 +304,9 @@ class RCInferenceEngine:
     # Full Pipeline: Generate Quiz from Article
     # ─────────────────────────────────────────────────────────
 
-    def generate_quiz(self, article: str, question: str = "", correct_answer: str = "") -> dict:
+    def generate_quiz(
+        self, article: str, question: str = "", correct_answer: str = ""
+    ) -> dict:
         """
         Full pipeline: given an article, question, and correct answer,
         generate distractors, create MCQ options, and prepare hints.
@@ -274,17 +320,20 @@ class RCInferenceEngine:
             correct_answer = correct_answer or generated_a
 
         # Generate 3 distractors
-        distractors = self.generate_distractors(article, question, correct_answer)
+        distractors = self.generate_distractors(
+            article, question, correct_answer)
 
         # Build options list: correct + distractors, shuffled
         import random
+
         options = [{"text": correct_answer, "is_correct": True}]
         for d in distractors:
             options.append({"text": d["text"], "is_correct": False})
 
         # Pad if we don't have enough distractors
         while len(options) < 4:
-            options.append({"text": "[No distractor generated]", "is_correct": False})
+            options.append(
+                {"text": "[No distractor generated]", "is_correct": False})
 
         random.shuffle(options)
 
@@ -302,7 +351,8 @@ class RCInferenceEngine:
             "question": question,
             "options": options,
             "hints": hints,
-            "correct_label": next(o["label"] for o in options if o["is_correct"]),
+            "correct_label": next(
+                o["label"] for o in options if o["is_correct"]),
             "total_latency_ms": latency,
         }
 
@@ -321,8 +371,7 @@ if __name__ == "__main__":
         "who are credited with inventing and building the world's first successful "
         "airplane. They made the first controlled, sustained flight of a powered "
         "aircraft on December 17, 1903. Their breakthrough achievement changed "
-        "transportation forever."
-    )
+        "transportation forever.")
     sample_question = "Who invented the first successful airplane?"
     sample_answer = "The Wright brothers"
 
@@ -335,7 +384,7 @@ if __name__ == "__main__":
         print(f"  [{marker}] {opt['label']}: {opt['text']}")
 
     print(f"\nCorrect answer: {quiz['correct_label']}")
-    print(f"\nHints:")
+    print("\nHints:")
     for h in quiz["hints"]:
         print(f"  Hint {h['level']}: {h['text'][:80]}...")
 
